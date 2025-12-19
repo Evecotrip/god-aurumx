@@ -35,6 +35,23 @@ interface CheckUserExistsResponse {
 }
 
 // ============================================
+// HELPER FUNCTIONS
+// ============================================
+
+/**
+ * Safely parse JSON response, handling HTML error pages
+ */
+async function safeJsonParse<T>(response: Response): Promise<T> {
+  const text = await response.text();
+  try {
+    return JSON.parse(text);
+  } catch {
+    console.error('Failed to parse response as JSON:', text.substring(0, 200));
+    throw new Error('Server returned an invalid response. Please check if the backend is running.');
+  }
+}
+
+// ============================================
 // API FUNCTIONS
 // ============================================
 
@@ -66,14 +83,14 @@ export async function checkUserExists(
     );
 
     if (!response.ok) {
-      const errorData = await response.json();
+      const errorData = await safeJsonParse<any>(response);
       return {
         success: false,
         message: errorData.message || "Failed to check user existence",
       };
     }
 
-    return await response.json();
+    return await safeJsonParse(response);
   } catch (error) {
     console.error("Error checking user existence:", error);
     return {
@@ -92,6 +109,7 @@ export async function generateToken(
   clerkUserId: string
 ): Promise<ApiResponse<TokenResponse>> {
   try {
+    console.log("Generating token for clerk user ID:", clerkUserId);
     const response = await fetch(`${BASE_URL}/api/v1/auth/exchange`, {
       method: "POST",
       headers: {
@@ -101,16 +119,17 @@ export async function generateToken(
         clerkUserId,
       }),
     });
+    console.log("Token response:", response);
 
     if (!response.ok) {
-      const errorData = await response.json();
+      const errorData = await safeJsonParse<any>(response);
       return {
         success: false,
         message: errorData.message || "Failed to generate token",
       };
     }
 
-    return await response.json();
+    return await safeJsonParse(response);
   } catch (error) {
     console.error("Error generating token:", error);
     return {
@@ -138,14 +157,14 @@ export async function getUserProfile(
     });
 
     if (!response.ok) {
-      const errorData = await response.json();
+      const errorData = await safeJsonParse<any>(response);
       return {
         success: false,
         message: errorData.message || "Failed to get user profile",
       };
     }
 
-    return await response.json();
+    return await safeJsonParse(response);
   } catch (error) {
     console.error("Error getting user profile:", error);
     return {

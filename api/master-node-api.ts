@@ -105,6 +105,19 @@ export interface RejectRequestPayload {
 // ============================================
 
 /**
+ * Safely parse JSON response, handling HTML error pages
+ */
+async function safeJsonParse<T>(response: Response): Promise<T> {
+  const text = await response.text();
+  try {
+    return JSON.parse(text);
+  } catch {
+    console.error('Failed to parse response as JSON:', text.substring(0, 200));
+    throw new Error('Server returned an invalid response. Please check if the backend is running.');
+  }
+}
+
+/**
  * Build query string from filters
  */
 function buildQueryString(filters: RequestFilters): string {
@@ -149,14 +162,14 @@ export async function getDashboardStats(
     });
 
     if (!response.ok) {
-      const errorData = await response.json();
+      const errorData = await safeJsonParse<any>(response);
       return {
         success: false,
         message: errorData.message || "Failed to fetch dashboard stats",
       };
     }
 
-    return await response.json();
+    return await safeJsonParse(response);
   } catch (error) {
     console.error("Error fetching dashboard stats:", error);
     return {
@@ -187,14 +200,14 @@ export async function getAllRequests(
     );
 
     if (!response.ok) {
-      const errorData = await response.json();
+      const errorData = await safeJsonParse<any>(response);
       return {
         success: false,
         message: errorData.message || "Failed to fetch requests",
       };
     }
 
-    return await response.json();
+    return await safeJsonParse(response);
   } catch (error) {
     console.error("Error fetching requests:", error);
     return {
@@ -225,14 +238,14 @@ export async function getPendingRequests(
     );
 
     if (!response.ok) {
-      const errorData = await response.json();
+      const errorData = await safeJsonParse<any>(response);
       return {
         success: false,
         message: errorData.message || "Failed to fetch pending requests",
       };
     }
 
-    return await response.json();
+    return await safeJsonParse(response);
   } catch (error) {
     console.error("Error fetching pending requests:", error);
     return {
@@ -262,14 +275,14 @@ export async function getRequestById(
     );
 
     if (!response.ok) {
-      const errorData = await response.json();
+      const errorData = await safeJsonParse<any>(response);
       return {
         success: false,
         message: errorData.message || "Failed to fetch request details",
       };
     }
 
-    return await response.json();
+    return await safeJsonParse(response);
   } catch (error) {
     console.error("Error fetching request details:", error);
     return {
@@ -299,14 +312,14 @@ export async function sendBankDetails(
     );
 
     if (!response.ok) {
-      const errorData = await response.json();
+      const errorData = await safeJsonParse<any>(response);
       return {
         success: false,
         message: errorData.message || "Failed to send bank details",
       };
     }
 
-    return await response.json();
+    return await safeJsonParse(response);
   } catch (error) {
     console.error("Error sending bank details:", error);
     return {
@@ -339,14 +352,14 @@ export async function verifyRequest(
     );
 
     if (!response.ok) {
-      const errorData = await response.json();
+      const errorData = await safeJsonParse<any>(response);
       return {
         success: false,
         message: errorData.message || "Failed to verify request",
       };
     }
 
-    return await response.json();
+    return await safeJsonParse(response);
   } catch (error) {
     console.error("Error verifying request:", error);
     return {
@@ -379,14 +392,14 @@ export async function rejectRequest(
     );
 
     if (!response.ok) {
-      const errorData = await response.json();
+      const errorData = await safeJsonParse<any>(response);
       return {
         success: false,
         message: errorData.message || "Failed to reject request",
       };
     }
 
-    return await response.json();
+    return await safeJsonParse(response);
   } catch (error) {
     console.error("Error rejecting request:", error);
     return {

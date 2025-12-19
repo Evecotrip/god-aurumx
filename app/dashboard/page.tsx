@@ -3,11 +3,11 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useUser, useClerk } from '@clerk/nextjs';
-import { 
-  LayoutDashboard, 
-  Clock, 
-  CheckCircle, 
-  XCircle, 
+import {
+  LayoutDashboard,
+  Clock,
+  CheckCircle,
+  XCircle,
   DollarSign,
   Filter,
   Search,
@@ -18,7 +18,10 @@ import {
   Loader2,
   LogOut,
   TrendingUp,
-  Calendar
+  Calendar,
+  ChevronLeft,
+  ChevronRight,
+  MoreVertical
 } from 'lucide-react';
 import { getTokenFromCookies, removeTokenFromCookies } from '@/api/token-user-api';
 import {
@@ -33,12 +36,24 @@ import {
   type AddMoneyRequest,
   type RequestFilters
 } from '@/api/master-node-api';
+import {
+  getPendingWithdrawals,
+  processWithdrawal,
+  rejectWithdrawal,
+  type Withdrawal
+} from '@/api/god-admin-api';
+
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import { Modal } from '@/components/ui/modal';
 
 export default function DashboardPage() {
   const router = useRouter();
   const { user, isLoaded } = useUser();
   const { signOut } = useClerk();
-  
+
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [requests, setRequests] = useState<AddMoneyRequest[]>([]);
   const [selectedRequest, setSelectedRequest] = useState<AddMoneyRequest | null>(null);
@@ -46,9 +61,9 @@ export default function DashboardPage() {
   const [actionLoading, setActionLoading] = useState(false);
   const [error, setError] = useState('');
   const [token, setToken] = useState<string | null>(null);
-  
+
   // Filters
-  const [activeTab, setActiveTab] = useState<'all' | 'pending'>('pending');
+  const [activeTab, setActiveTab] = useState<'all' | 'pending' | 'withdrawals'>('pending');
   const [filters, setFilters] = useState<RequestFilters>({
     page: 1,
     limit: 20,
@@ -69,10 +84,17 @@ export default function DashboardPage() {
   const [adminNotes, setAdminNotes] = useState('');
   const [rejectionReason, setRejectionReason] = useState('');
 
+  // Withdrawal & KYC states
+  const [withdrawals, setWithdrawals] = useState<Withdrawal[]>([]);
+  const [selectedWithdrawal, setSelectedWithdrawal] = useState<Withdrawal | null>(null);
+  const [showWithdrawalModal, setShowWithdrawalModal] = useState(false);
+  const [transactionRef, setTransactionRef] = useState('');
+  const [withdrawalAdminNotes, setWithdrawalAdminNotes] = useState('');
+
   // Fetch dashboard stats
   const fetchStats = async () => {
     if (!token) return;
-    
+
     console.log('Fetching stats with token:', token);
     const response = await getDashboardStats(token);
     console.log('Stats response:', response);
@@ -91,24 +113,24 @@ export default function DashboardPage() {
       console.log('No token available for fetching requests');
       return;
     }
-    
+
     console.log('Fetching requests - Tab:', activeTab, 'Filters:', filters);
     setLoading(true);
     try {
       // For pending tab, use getAllRequests with status=PENDING filter
-      const requestFilters = activeTab === 'pending' 
-        ? { ...filters, status: 'PENDING' }
+      const requestFilters = activeTab === 'pending'
+        ? { ...filters, status: 'PROCESSING' }
         : filters;
-      
+
       const response = await getAllRequests(token, requestFilters);
-      
+
       console.log('Requests response:', response);
-      
+
       if (response.success) {
         // API returns data as array directly, and pagination separately
         const requestsData = Array.isArray(response.data) ? response.data : [];
         const paginationData = (response as any).pagination || null;
-        
+
         console.log('Setting requests:', requestsData);
         console.log('Setting pagination:', paginationData);
         setRequests(requestsData);
@@ -125,18 +147,40 @@ export default function DashboardPage() {
     }
   };
 
+  // Fetch withdrawals
+  const fetchWithdrawals = async () => {
+    if (!token) return;
+    
+    setLoading(true);
+    try {
+      const response = await getPendingWithdrawals(token, filters.page, filters.limit);
+      
+      if (response.success && response.data) {
+        setWithdrawals(Array.isArray(response.data) ? response.data : []);
+        setPagination((response as any).pagination || pagination);
+      } else {
+        setError(response.message || 'Failed to fetch withdrawals');
+      }
+    } catch (err) {
+      setError('Error fetching withdrawals');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+
   // Get token on client side
   useEffect(() => {
     const initializeToken = async () => {
       let authToken = getTokenFromCookies();
       console.log('Retrieved token from cookies:', authToken);
-      
+
       // If no token but user is authenticated, generate one
       if (!authToken && user?.id) {
         console.log('No token found, generating new token for user:', user.id);
         const { generateToken: genToken, storeTokenInCookies: storeToken } = await import('@/api/token-user-api');
         const tokenResponse = await genToken(user.id);
-        
+
         if (tokenResponse.success && tokenResponse.data?.token) {
           authToken = tokenResponse.data.token;
           storeToken(authToken);
@@ -147,15 +191,15 @@ export default function DashboardPage() {
           return;
         }
       }
-      
+
       setToken(authToken);
-      
+
       if (!authToken) {
         console.error('No token available!');
         setError('Authentication token not found. Please login again.');
       }
     };
-    
+
     if (user) {
       initializeToken();
     }
@@ -164,7 +208,7 @@ export default function DashboardPage() {
   // Initial load
   useEffect(() => {
     if (!isLoaded) return;
-    
+
     if (!user) {
       router.push('/login');
       return;
@@ -173,7 +217,13 @@ export default function DashboardPage() {
     if (!token) return;
 
     fetchStats();
-    fetchRequests();
+    
+    // Fetch data based on active tab
+    if (activeTab === 'withdrawals') {
+      fetchWithdrawals(); 
+    } else {
+      fetchRequests();
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isLoaded, user, token, activeTab, filters]);
 
@@ -182,10 +232,10 @@ export default function DashboardPage() {
     try {
       // Remove backend token
       removeTokenFromCookies();
-      
+
       // Sign out from Clerk
       await signOut();
-      
+
       // Redirect to login
       router.push('/login');
     } catch (error) {
@@ -198,7 +248,7 @@ export default function DashboardPage() {
   // Handle view details
   const handleViewDetails = async (requestId: string) => {
     if (!token) return;
-    
+
     setActionLoading(true);
     const response = await getRequestById(token, requestId);
     if (response.success && response.data) {
@@ -211,7 +261,7 @@ export default function DashboardPage() {
   // Handle send bank details
   const handleSendBankDetails = async (requestId: string) => {
     if (!token) return;
-    
+
     setActionLoading(true);
     const response = await sendBankDetails(token, requestId);
     if (response.success) {
@@ -229,7 +279,7 @@ export default function DashboardPage() {
   // Handle verify request
   const handleVerify = async () => {
     if (!token || !selectedRequest) return;
-    
+
     setActionLoading(true);
     const response = await verifyRequest(token, selectedRequest.id, { adminNotes });
     if (response.success) {
@@ -247,7 +297,7 @@ export default function DashboardPage() {
   // Handle reject request
   const handleReject = async () => {
     if (!token || !selectedRequest) return;
-    
+
     setActionLoading(true);
     const response = await rejectRequest(token, selectedRequest.id, { rejectionReason });
     if (response.success) {
@@ -262,145 +312,212 @@ export default function DashboardPage() {
     setActionLoading(false);
   };
 
+  // Handle view withdrawal details
+  const handleViewWithdrawal = (withdrawal: Withdrawal) => {
+    setSelectedWithdrawal(withdrawal);
+    setShowWithdrawalModal(true);
+  };
+
+  // Handle process withdrawal
+  const handleProcessWithdrawal = async () => {
+    if (!token || !selectedWithdrawal) return;
+    
+    setActionLoading(true);
+    const response = await processWithdrawal(token, selectedWithdrawal.id, {
+      transactionRef,
+      adminNotes: withdrawalAdminNotes
+    });
+    
+    if (response.success) {
+      setShowWithdrawalModal(false);
+      setTransactionRef('');
+      setWithdrawalAdminNotes('');
+      await fetchWithdrawals();
+    } else {
+      setError(response.message || 'Failed to process withdrawal');
+    }
+    setActionLoading(false);
+  };
+
+  // Handle reject withdrawal
+  const handleRejectWithdrawal = async () => {
+    if (!token || !selectedWithdrawal) return;
+    
+    setActionLoading(true);
+    const response = await rejectWithdrawal(token, selectedWithdrawal.id, {
+      rejectionReason
+    });
+    
+    if (response.success) {
+      setShowWithdrawalModal(false);
+      setRejectionReason('');
+      await fetchWithdrawals();
+    } else {
+      setError(response.message || 'Failed to reject withdrawal');
+    }
+    setActionLoading(false);
+  };
+
+
   // Status badge component
   const StatusBadge = ({ status }: { status: string }) => {
-    const colors: Record<string, string> = {
-      PENDING: 'bg-yellow-100 text-yellow-800',
-      PROCESSING: 'bg-blue-100 text-blue-800',
-      COMPLETED: 'bg-green-100 text-green-800',
-      REJECTED: 'bg-red-100 text-red-800',
+    const variants: Record<string, 'default' | 'secondary' | 'destructive' | 'outline' | 'success' | 'warning' | 'info'> = {
+      PENDING: 'warning',
+      PROCESSING: 'info',
+      COMPLETED: 'success',
+      REJECTED: 'destructive',
     };
-    
+
     return (
-      <span className={`px-3 py-1 rounded-full text-xs font-semibold ${colors[status] || 'bg-gray-100 text-gray-800'}`}>
+      <Badge variant={variants[status] || 'secondary'}>
         {status}
-      </span>
+      </Badge>
     );
   };
 
   if (!isLoaded) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <Loader2 className="w-12 h-12 text-blue-600 animate-spin" />
+      <div className="min-h-screen flex items-center justify-center bg-background">
+        <Loader2 className="w-12 h-12 text-primary animate-spin" />
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-background text-foreground pb-20">
+      {/* Background Elements */}
+      <div className="fixed top-0 left-0 w-full h-full overflow-hidden -z-10 pointer-events-none">
+        <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] rounded-full bg-primary/5 blur-[120px]" />
+        <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] rounded-full bg-accent/5 blur-[120px]" />
+      </div>
+
       {/* Header */}
-      <header className="bg-white border-b border-gray-200">
+      <header className="sticky top-0 z-40 w-full border-b border-white/5 bg-background/80 backdrop-blur-xl">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <LayoutDashboard className="w-8 h-8 text-blue-600" />
+              <div className="p-2 bg-primary/10 rounded-lg">
+                <LayoutDashboard className="w-6 h-6 text-primary" />
+              </div>
               <div>
-                <h1 className="text-2xl font-bold text-gray-900">Master Node Dashboard</h1>
-                <p className="text-sm text-gray-600">Welcome, {user?.firstName}</p>
+                <h1 className="text-xl font-bold text-foreground tracking-tight">Master Node</h1>
+                <p className="text-xs text-muted-foreground">Welcome back, {user?.firstName}</p>
               </div>
             </div>
-            <button
-              onClick={() => router.push('/currency-settings')}
-              className="flex items-center gap-2 px-4 py-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
-            >
-              <DollarSign className="w-5 h-5" />
-              Currency Settings
-            </button>
-            <button
-              onClick={handleLogout}
-              className="flex items-center gap-2 px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg transition-colors"
-            >
-              <LogOut className="w-5 h-5" />
-              Logout
-            </button>
+            <div className="flex items-center gap-3">
+              <button
+                onClick={() => router.push('/currency-settings')}
+                className="flex items-center gap-2 px-4 py-2 text-sm border border-white/10 rounded-lg hover:bg-white/5 transition-colors"
+              >
+                <DollarSign className="w-4 h-4" />
+                Settings
+              </button>
+              <button
+                onClick={handleLogout}
+                className="flex items-center gap-2 px-4 py-2 text-sm hover:bg-white/5 rounded-lg transition-colors"
+              >
+                <LogOut className="w-4 h-4" />
+                Logout
+              </button>
+            </div>
           </div>
         </div>
       </header>
 
-      {/* Stats Cards */}
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
-          <div className="bg-white rounded-xl shadow-sm p-6 border border-gray-100">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm text-gray-600 mb-1">Pending</p>
-                <p className="text-3xl font-bold text-yellow-600">
-                  {stats ? stats.pending : '0'}
-                </p>
-              </div>
-              <Clock className="w-12 h-12 text-yellow-600 opacity-20" />
-            </div>
-          </div>
+      {/* Main Content */}
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
 
-          <div className="bg-white rounded-xl shadow-sm p-6 border border-gray-100">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm text-gray-600 mb-1">Processing</p>
-                <p className="text-3xl font-bold text-blue-600">
-                  {stats ? stats.processing : '0'}
-                </p>
-              </div>
-              <TrendingUp className="w-12 h-12 text-blue-600 opacity-20" />
+        {/* Stats Cards */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+          <Card gradient className="relative overflow-hidden group">
+            <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity">
+              <Clock className="w-16 h-16 text-amber-500" />
             </div>
-          </div>
+            <CardHeader className="pb-2">
+              <CardDescription>Pending Requests</CardDescription>
+              <CardTitle className="text-3xl font-bold text-amber-500">
+                {stats ? stats.pending : '0'}
+              </CardTitle>
+            </CardHeader>
+          </Card>
 
-          <div className="bg-white rounded-xl shadow-sm p-6 border border-gray-100">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm text-gray-600 mb-1">Completed</p>
-                <p className="text-3xl font-bold text-green-600">
-                  {stats ? stats.completed : '0'}
-                </p>
-              </div>
-              <CheckCircle className="w-12 h-12 text-green-600 opacity-20" />
+          <Card gradient className="relative overflow-hidden group">
+            <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity">
+              <TrendingUp className="w-16 h-16 text-blue-500" />
             </div>
-          </div>
+            <CardHeader className="pb-2">
+              <CardDescription>Processing</CardDescription>
+              <CardTitle className="text-3xl font-bold text-blue-500">
+                {stats ? stats.processing : '0'}
+              </CardTitle>
+            </CardHeader>
+          </Card>
 
-          <div className="bg-white rounded-xl shadow-sm p-6 border border-gray-100">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm text-gray-600 mb-1">Total USDT</p>
-                <p className="text-3xl font-bold text-purple-600">
-                  {stats ? stats.totalUsdtCredited : '0.00'}
-                </p>
-              </div>
-              <DollarSign className="w-12 h-12 text-purple-600 opacity-20" />
+          <Card gradient className="relative overflow-hidden group">
+            <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity">
+              <CheckCircle className="w-16 h-16 text-emerald-500" />
             </div>
-          </div>
+            <CardHeader className="pb-2">
+              <CardDescription>Completed</CardDescription>
+              <CardTitle className="text-3xl font-bold text-emerald-500">
+                {stats ? stats.completed : '0'}
+              </CardTitle>
+            </CardHeader>
+          </Card>
+
+          <Card gradient className="relative overflow-hidden group">
+            <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity">
+              <DollarSign className="w-16 h-16 text-violet-500" />
+            </div>
+            <CardHeader className="pb-2">
+              <CardDescription>Total USDT Credited</CardDescription>
+              <CardTitle className="text-3xl font-bold text-violet-500">
+                {stats ? stats.totalUsdtCredited : '0.00'}
+              </CardTitle>
+            </CardHeader>
+          </Card>
         </div>
 
-        {/* Tabs and Filters */}
-        <div className="bg-white rounded-xl shadow-sm border border-gray-100 mb-6">
-          <div className="border-b border-gray-200">
-            <div className="flex items-center justify-between px-6 py-4">
-              <div className="flex gap-4">
+        {/* Filters and Table */}
+        <Card className="border-white/5 bg-card/50">
+          <div className="p-6 border-b border-white/5">
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
+              <div className="flex bg-secondary/50 p-1 rounded-lg overflow-x-auto">
                 <button
                   onClick={() => setActiveTab('pending')}
-                  className={`px-4 py-2 rounded-lg font-medium transition-colors ${
-                    activeTab === 'pending'
-                      ? 'bg-blue-100 text-blue-700'
-                      : 'text-gray-600 hover:bg-gray-100'
-                  }`}
+                  className={`px-4 py-2 rounded-md text-sm font-medium transition-all whitespace-nowrap ${activeTab === 'pending'
+                    ? 'bg-primary text-white shadow-lg shadow-primary/20'
+                    : 'text-muted-foreground hover:text-foreground hover:bg-white/5'
+                    }`}
                 >
                   Pending Requests
                 </button>
                 <button
                   onClick={() => setActiveTab('all')}
-                  className={`px-4 py-2 rounded-lg font-medium transition-colors ${
-                    activeTab === 'all'
-                      ? 'bg-blue-100 text-blue-700'
-                      : 'text-gray-600 hover:bg-gray-100'
-                  }`}
+                  className={`px-4 py-2 rounded-md text-sm font-medium transition-all whitespace-nowrap ${activeTab === 'all'
+                    ? 'bg-primary text-white shadow-lg shadow-primary/20'
+                    : 'text-muted-foreground hover:text-foreground hover:bg-white/5'
+                    }`}
                 >
                   All Requests
                 </button>
+                <button
+                  onClick={() => setActiveTab('withdrawals')}
+                  className={`px-4 py-2 rounded-md text-sm font-medium transition-all whitespace-nowrap ${activeTab === 'withdrawals'
+                    ? 'bg-primary text-white shadow-lg shadow-primary/20'
+                    : 'text-muted-foreground hover:text-foreground hover:bg-white/5'
+                    }`}
+                >
+                  Withdrawals
+                </button>
+                
               </div>
 
-              <div className="flex gap-3">
+              <div className="flex gap-3 w-full sm:w-auto">
                 <select
                   value={filters.currency}
                   onChange={(e) => setFilters({ ...filters, currency: e.target.value, page: 1 })}
-                  className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  className="h-10 px-3 rounded-lg bg-secondary/50 border border-white/10 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
                 >
                   <option value="">All Currencies</option>
                   <option value="INR">INR</option>
@@ -412,7 +529,7 @@ export default function DashboardPage() {
                   <select
                     value={filters.status}
                     onChange={(e) => setFilters({ ...filters, status: e.target.value, page: 1 })}
-                    className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    className="h-10 px-3 rounded-lg bg-secondary/50 border border-white/10 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
                   >
                     <option value="">All Status</option>
                     <option value="PENDING">Pending</option>
@@ -425,71 +542,75 @@ export default function DashboardPage() {
             </div>
           </div>
 
-          {/* Requests Table */}
           <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead className="bg-gray-50 border-b border-gray-200">
-                <tr>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">User</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Currency</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Amount</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">USDT</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="bg-white divide-y divide-gray-200">
-                {!requests || requests.length === 0 ? (
+            {/* Add Money Requests Table */}
+            {(activeTab === 'pending' || activeTab === 'all') && (
+              <table className="w-full">
+                <thead className="bg-secondary/30">
                   <tr>
-                    <td colSpan={7} className="px-6 py-12 text-center text-gray-500">
-                      No requests found
+                    <th className="px-6 py-4 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">User</th>
+                    <th className="px-6 py-4 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">Currency</th>
+                    <th className="px-6 py-4 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">Amount</th>
+                    <th className="px-6 py-4 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">USDT</th>
+                    <th className="px-6 py-4 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">Status</th>
+                    <th className="px-6 py-4 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">Date</th>
+                    <th className="px-6 py-4 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-white/5">
+                  {!requests || requests.length === 0 ? (
+                  <tr>
+                    <td colSpan={7} className="px-6 py-12 text-center text-muted-foreground">
+                      <div className="flex flex-col items-center justify-center gap-2">
+                        <Search className="w-8 h-8 opacity-20" />
+                        <p>No requests found</p>
+                      </div>
                     </td>
                   </tr>
                 ) : (
                   requests.map((request) => (
-                    <tr key={request.id} className="hover:bg-gray-50">
+                    <tr key={request.id} className="hover:bg-white/5 transition-colors">
                       <td className="px-6 py-4 whitespace-nowrap">
                         <div>
-                          <div className="text-sm font-medium text-gray-900">
+                          <div className="text-sm font-medium text-foreground">
                             {request.user.firstName} {request.user.lastName}
                           </div>
-                          <div className="text-sm text-gray-500">{request.user.email}</div>
+                          <div className="text-xs text-muted-foreground">{request.user.email}</div>
                         </div>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
-                        <span className="text-sm font-medium text-gray-900">{request.currency}</span>
+                        <span className="text-sm font-medium text-foreground">{request.currency}</span>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
-                        <span className="text-sm text-gray-900">{request.currencyAmount}</span>
+                        <span className="text-sm text-foreground">{request.currencyAmount}</span>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
-                        <span className="text-sm font-semibold text-green-600">{request.totalAmount}</span>
+                        <span className="text-sm font-semibold text-emerald-500">{request.totalAmount}</span>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
                         <StatusBadge status={request.status} />
                       </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-muted-foreground">
                         {new Date(request.createdAt).toLocaleDateString()}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm">
                         <div className="flex gap-2">
                           <button
                             onClick={() => handleViewDetails(request.id)}
-                            className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                            className="h-8 w-8 flex items-center justify-center hover:bg-white/5 rounded-lg transition-colors"
                             title="View Details"
                           >
-                            <Eye className="w-4 h-4" />
+                            <Eye className="w-4 h-4 text-blue-400" />
                           </button>
-                          
+
                           {request.status === 'PENDING' && !request.bankDetailsSentAt && (
                             <button
                               onClick={() => handleSendBankDetails(request.id)}
-                              className="p-2 text-purple-600 hover:bg-purple-50 rounded-lg transition-colors"
+                              className="h-8 w-8 flex items-center justify-center hover:bg-white/5 rounded-lg transition-colors disabled:opacity-50"
                               title="Send Bank Details"
                               disabled={actionLoading}
                             >
-                              <Send className="w-4 h-4" />
+                              <Send className="w-4 h-4 text-violet-400" />
                             </button>
                           )}
                         </div>
@@ -499,264 +620,472 @@ export default function DashboardPage() {
                 )}
               </tbody>
             </table>
+            )}
+
+            {/* Withdrawals Table */}
+            {activeTab === 'withdrawals' && (
+              <table className="w-full">
+                <thead className="bg-secondary/30">
+                  <tr>
+                    <th className="px-6 py-4 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">User</th>
+                    <th className="px-6 py-4 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">Amount (USDT)</th>
+                    <th className="px-6 py-4 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">Method</th>
+                    <th className="px-6 py-4 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">Bank Details</th>
+                    <th className="px-6 py-4 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">Date</th>
+                    <th className="px-6 py-4 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-white/5">
+                  {!withdrawals || withdrawals.length === 0 ? (
+                    <tr>
+                      <td colSpan={6} className="px-6 py-12 text-center text-muted-foreground">
+                        <div className="flex flex-col items-center justify-center gap-2">
+                          <Search className="w-8 h-8 opacity-20" />
+                          <p>No pending withdrawals</p>
+                        </div>
+                      </td>
+                    </tr>
+                  ) : (
+                    withdrawals.map((withdrawal) => (
+                      <tr key={withdrawal.id} className="hover:bg-white/5 transition-colors">
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <div>
+                            <div className="text-sm font-medium text-foreground">
+                              {withdrawal.user.firstName} {withdrawal.user.lastName}
+                            </div>
+                            <div className="text-xs text-muted-foreground">{withdrawal.user.email}</div>
+                          </div>
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <span className="text-sm font-semibold text-emerald-500">{withdrawal.amount}</span>
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <span className="text-sm text-foreground">{withdrawal.method}</span>
+                        </td>
+                        <td className="px-6 py-4">
+                          {withdrawal.bankDetails && (
+                            <div className="text-xs text-muted-foreground">
+                              <div>{withdrawal.bankDetails.accountName}</div>
+                              <div>{withdrawal.bankDetails.bankName}</div>
+                            </div>
+                          )}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-muted-foreground">
+                          {new Date(withdrawal.createdAt).toLocaleDateString()}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <button
+                            onClick={() => handleViewWithdrawal(withdrawal)}
+                            className="h-8 w-8 flex items-center justify-center hover:bg-white/5 rounded-lg transition-colors"
+                          >
+                            <Eye className="w-4 h-4 text-blue-400" />
+                          </button>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            )}
           </div>
 
           {/* Pagination */}
           {pagination && pagination.totalPages > 1 && (
-            <div className="px-6 py-4 border-t border-gray-200 flex items-center justify-between">
-              <div className="text-sm text-gray-700">
-                Showing page {pagination.page} of {pagination.totalPages} ({pagination.total} total)
+            <div className="px-6 py-4 border-t border-white/5 flex items-center justify-between">
+              <div className="text-sm text-muted-foreground">
+                Page {pagination.page} of {pagination.totalPages}
               </div>
               <div className="flex gap-2">
                 <button
                   onClick={() => setFilters({ ...filters, page: Math.max(1, filters.page! - 1) })}
                   disabled={pagination.page === 1}
-                  className="px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="flex items-center gap-2 px-4 py-2 text-sm border border-white/10 rounded-lg hover:bg-white/5 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
+                  <ChevronLeft className="w-4 h-4" />
                   Previous
                 </button>
                 <button
                   onClick={() => setFilters({ ...filters, page: Math.min(pagination.totalPages, (filters.page || 1) + 1) })}
                   disabled={pagination.page === pagination.totalPages}
-                  className="px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="flex items-center gap-2 px-4 py-2 text-sm border border-white/10 rounded-lg hover:bg-white/5 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   Next
+                  <ChevronRight className="w-4 h-4" />
                 </button>
               </div>
             </div>
           )}
-        </div>
+        </Card>
       </div>
 
       {/* Details Modal */}
-      {showDetailsModal && selectedRequest && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-xl max-w-3xl w-full max-h-[90vh] overflow-y-auto">
-            <div className="sticky top-0 bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between">
-              <h2 className="text-xl font-bold text-gray-900">Request Details</h2>
-              <button
-                onClick={() => setShowDetailsModal(false)}
-                className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
-              >
-                <X className="w-5 h-5" />
-              </button>
+      <Modal
+        isOpen={showDetailsModal && !!selectedRequest}
+        onClose={() => setShowDetailsModal(false)}
+        title="Request Details"
+        maxWidth="2xl"
+      >
+        {selectedRequest && (
+          <div className="space-y-6 max-h-[70vh] overflow-y-auto pr-2">
+            {/* User Info */}
+            <div>
+              <h3 className="text-sm font-semibold text-muted-foreground mb-3 uppercase tracking-wider">User Information</h3>
+              <div className="grid grid-cols-2 gap-4 bg-secondary/30 p-4 rounded-lg border border-white/5">
+                <div>
+                  <p className="text-xs text-muted-foreground">Name</p>
+                  <p className="text-sm font-medium text-foreground">{selectedRequest.user.firstName} {selectedRequest.user.lastName}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground">Email</p>
+                  <p className="text-sm font-medium text-foreground">{selectedRequest.user.email}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground">Phone</p>
+                  <p className="text-sm font-medium text-foreground">{selectedRequest.user.phone}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground">Referral Code</p>
+                  <p className="text-sm font-medium text-foreground">{selectedRequest.user.referralCode}</p>
+                </div>
+              </div>
             </div>
 
-            <div className="p-6 space-y-6">
-              {/* User Info */}
-              <div>
-                <h3 className="text-sm font-semibold text-gray-700 mb-3">User Information</h3>
-                <div className="grid grid-cols-2 gap-4 bg-gray-50 p-4 rounded-lg">
-                  <div>
-                    <p className="text-xs text-gray-500">Name</p>
-                    <p className="text-sm font-medium">{selectedRequest.user.firstName} {selectedRequest.user.lastName}</p>
-                  </div>
-                  <div>
-                    <p className="text-xs text-gray-500">Email</p>
-                    <p className="text-sm font-medium">{selectedRequest.user.email}</p>
-                  </div>
-                  <div>
-                    <p className="text-xs text-gray-500">Phone</p>
-                    <p className="text-sm font-medium">{selectedRequest.user.phone}</p>
-                  </div>
-                  <div>
-                    <p className="text-xs text-gray-500">Referral Code</p>
-                    <p className="text-sm font-medium">{selectedRequest.user.referralCode}</p>
-                  </div>
-                </div>
-              </div>
-
-              {/* Payment Details */}
-              <div>
-                <h3 className="text-sm font-semibold text-gray-700 mb-3">Payment Details</h3>
-                <div className="grid grid-cols-2 gap-4 bg-gray-50 p-4 rounded-lg">
-                  <div>
-                    <p className="text-xs text-gray-500">Currency</p>
-                    <p className="text-sm font-medium">{selectedRequest.currency}</p>
-                  </div>
-                  <div>
-                    <p className="text-xs text-gray-500">Amount</p>
-                    <p className="text-sm font-medium">{selectedRequest.currencyAmount}</p>
-                  </div>
-                  <div>
-                    <p className="text-xs text-gray-500">USDT Amount</p>
-                    <p className="text-sm font-medium">{selectedRequest.usdtAmount}</p>
-                  </div>
-                  <div>
-                    <p className="text-xs text-gray-500">Bonus</p>
-                    <p className="text-sm font-medium text-green-600">{selectedRequest.bonusAmount}</p>
-                  </div>
-                  <div>
-                    <p className="text-xs text-gray-500">Total USDT</p>
-                    <p className="text-sm font-bold text-green-600">{selectedRequest.totalAmount}</p>
-                  </div>
-                  <div>
-                    <p className="text-xs text-gray-500">Exchange Rate</p>
-                    <p className="text-sm font-medium">{selectedRequest.exchangeRate}</p>
-                  </div>
-                  <div>
-                    <p className="text-xs text-gray-500">Method</p>
-                    <p className="text-sm font-medium">{selectedRequest.method}</p>
-                  </div>
-                  <div>
-                    <p className="text-xs text-gray-500">Status</p>
-                    <StatusBadge status={selectedRequest.status} />
-                  </div>
-                </div>
-              </div>
-
-              {/* Payment Proof */}
-              {selectedRequest.paymentProof && (
+            {/* Payment Details */}
+            <div>
+              <h3 className="text-sm font-semibold text-muted-foreground mb-3 uppercase tracking-wider">Payment Details</h3>
+              <div className="grid grid-cols-2 gap-4 bg-secondary/30 p-4 rounded-lg border border-white/5">
                 <div>
-                  <h3 className="text-sm font-semibold text-gray-700 mb-3">Payment Proof</h3>
+                  <p className="text-xs text-muted-foreground">Currency</p>
+                  <p className="text-sm font-medium text-foreground">{selectedRequest.currency}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground">Amount</p>
+                  <p className="text-sm font-medium text-foreground">{selectedRequest.currencyAmount}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground">USDT Amount</p>
+                  <p className="text-sm font-medium text-foreground">{selectedRequest.usdtAmount}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground">Bonus</p>
+                  <p className="text-sm font-medium text-emerald-500">{selectedRequest.bonusAmount}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground">Total USDT</p>
+                  <p className="text-sm font-bold text-emerald-500">{selectedRequest.totalAmount}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground">Exchange Rate</p>
+                  <p className="text-sm font-medium text-foreground">{selectedRequest.exchangeRate}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground">Method</p>
+                  <p className="text-sm font-medium text-foreground">{selectedRequest.method}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground">Status</p>
+                  <StatusBadge status={selectedRequest.status} />
+                </div>
+              </div>
+            </div>
+
+            {/* Payment Proof */}
+            {selectedRequest.paymentProof && (
+              <div>
+                <h3 className="text-sm font-semibold text-muted-foreground mb-3 uppercase tracking-wider">Payment Proof</h3>
+                <div className="rounded-lg overflow-hidden border border-white/10">
                   <img
                     src={selectedRequest.paymentProof}
                     alt="Payment Proof"
-                    className="w-full rounded-lg border border-gray-200"
+                    className="w-full h-auto object-cover"
                   />
                 </div>
-              )}
-
-              {/* Transaction Reference */}
-              {selectedRequest.transactionRef && (
-                <div>
-                  <h3 className="text-sm font-semibold text-gray-700 mb-2">Transaction Reference</h3>
-                  <p className="text-sm bg-gray-50 p-3 rounded-lg font-mono">{selectedRequest.transactionRef}</p>
-                </div>
-              )}
-
-              {/* Notes */}
-              {selectedRequest.userNotes && (
-                <div>
-                  <h3 className="text-sm font-semibold text-gray-700 mb-2">User Notes</h3>
-                  <p className="text-sm bg-gray-50 p-3 rounded-lg">{selectedRequest.userNotes}</p>
-                </div>
-              )}
-
-              {selectedRequest.adminNotes && (
-                <div>
-                  <h3 className="text-sm font-semibold text-gray-700 mb-2">Admin Notes</h3>
-                  <p className="text-sm bg-blue-50 p-3 rounded-lg">{selectedRequest.adminNotes}</p>
-                </div>
-              )}
-
-              {selectedRequest.rejectionReason && (
-                <div>
-                  <h3 className="text-sm font-semibold text-gray-700 mb-2">Rejection Reason</h3>
-                  <p className="text-sm bg-red-50 p-3 rounded-lg text-red-800">{selectedRequest.rejectionReason}</p>
-                </div>
-              )}
-
-              {/* Actions */}
-              <div className="flex gap-3 pt-4 border-t border-gray-200">
-                {/* Send Bank Details - Only for PENDING without bank details sent */}
-                {selectedRequest.status === 'PENDING' && !selectedRequest.bankDetailsSentAt && (
-                  <button
-                    onClick={() => handleSendBankDetails(selectedRequest.id)}
-                    disabled={actionLoading}
-                    className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors disabled:opacity-50"
-                  >
-                    <Send className="w-5 h-5" />
-                    Send Bank Details
-                  </button>
-                )}
-                
-                {/* Verify/Reject - Only for PROCESSING with payment proof */}
-                {selectedRequest.status === 'PROCESSING' && selectedRequest.paymentProof && (
-                  <>
-                    <button
-                      onClick={() => setShowVerifyModal(true)}
-                      disabled={actionLoading}
-                      className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors disabled:opacity-50"
-                    >
-                      <Check className="w-5 h-5" />
-                      Verify & Approve
-                    </button>
-                    <button
-                      onClick={() => setShowRejectModal(true)}
-                      disabled={actionLoading}
-                      className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors disabled:opacity-50"
-                    >
-                      <X className="w-5 h-5" />
-                      Reject
-                    </button>
-                  </>
-                )}
               </div>
+            )}
+
+            {/* Transaction Reference */}
+            {selectedRequest.transactionRef && (
+              <div>
+                <h3 className="text-sm font-semibold text-muted-foreground mb-2 uppercase tracking-wider">Transaction Reference</h3>
+                <p className="text-sm bg-secondary/30 p-3 rounded-lg font-mono text-foreground border border-white/5">{selectedRequest.transactionRef}</p>
+              </div>
+            )}
+
+            {/* Notes */}
+            {selectedRequest.userNotes && (
+              <div>
+                <h3 className="text-sm font-semibold text-muted-foreground mb-2 uppercase tracking-wider">User Notes</h3>
+                <p className="text-sm bg-secondary/30 p-3 rounded-lg text-foreground border border-white/5">{selectedRequest.userNotes}</p>
+              </div>
+            )}
+
+            {selectedRequest.adminNotes && (
+              <div>
+                <h3 className="text-sm font-semibold text-muted-foreground mb-2 uppercase tracking-wider">Admin Notes</h3>
+                <p className="text-sm bg-blue-500/10 text-blue-200 p-3 rounded-lg border border-blue-500/20">{selectedRequest.adminNotes}</p>
+              </div>
+            )}
+
+            {selectedRequest.rejectionReason && (
+              <div>
+                <h3 className="text-sm font-semibold text-muted-foreground mb-2 uppercase tracking-wider">Rejection Reason</h3>
+                <p className="text-sm bg-red-500/10 text-red-200 p-3 rounded-lg border border-red-500/20">{selectedRequest.rejectionReason}</p>
+              </div>
+            )}
+
+            {/* Actions */}
+            <div className="flex gap-3 pt-4 border-t border-white/10">
+              {/* Send Bank Details - Only for PENDING without bank details sent */}
+              {selectedRequest.status === 'PENDING' && !selectedRequest.bankDetailsSentAt && (
+                <Button
+                  onClick={() => handleSendBankDetails(selectedRequest.id)}
+                  disabled={actionLoading}
+                  className="flex-1"
+                  leftIcon={<Send className="w-4 h-4" />}
+                >
+                  Send Bank Details
+                </Button>
+              )}
+
+              {/* Verify/Reject - Only for PROCESSING with payment proof */}
+              {selectedRequest.status === 'PROCESSING' && selectedRequest.paymentProof && (
+                <>
+                  <Button
+                    onClick={() => setShowVerifyModal(true)}
+                    disabled={actionLoading}
+                    variant="primary"
+                    className="flex-1 bg-emerald-600 hover:bg-emerald-700"
+                    leftIcon={<Check className="w-4 h-4" />}
+                  >
+                    Verify & Approve
+                  </Button>
+                  <Button
+                    onClick={() => setShowRejectModal(true)}
+                    disabled={actionLoading}
+                    variant="destructive"
+                    className="flex-1"
+                    leftIcon={<X className="w-4 h-4" />}
+                  >
+                    Reject
+                  </Button>
+                </>
+              )}
             </div>
           </div>
-        </div>
-      )}
+        )}
+      </Modal>
 
       {/* Verify Modal */}
-      {showVerifyModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-xl max-w-md w-full p-6">
-            <h2 className="text-xl font-bold text-gray-900 mb-4">Verify & Approve Request</h2>
-            <textarea
-              value={adminNotes}
-              onChange={(e) => setAdminNotes(e.target.value)}
-              placeholder="Add admin notes (optional)"
-              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent mb-4"
-              rows={4}
-            />
-            <div className="flex gap-3">
-              <button
-                onClick={() => setShowVerifyModal(false)}
-                className="flex-1 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleVerify}
-                disabled={actionLoading}
-                className="flex-1 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50"
-              >
-                {actionLoading ? 'Processing...' : 'Verify & Credit USDT'}
-              </button>
-            </div>
+      <Modal
+        isOpen={showVerifyModal}
+        onClose={() => setShowVerifyModal(false)}
+        title="Verify & Approve Request"
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-muted-foreground">
+            Are you sure you want to verify this request? This will credit <span className="text-emerald-500 font-bold">{selectedRequest?.totalAmount} USDT</span> to the user's wallet.
+          </p>
+          <textarea
+            value={adminNotes}
+            onChange={(e) => setAdminNotes(e.target.value)}
+            placeholder="Add admin notes (optional)"
+            className="w-full px-4 py-3 bg-secondary/30 border border-white/10 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-transparent text-foreground placeholder:text-muted-foreground"
+            rows={4}
+          />
+          <div className="flex gap-3">
+            <Button
+              variant="outline"
+              onClick={() => setShowVerifyModal(false)}
+              className="flex-1"
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={handleVerify}
+              disabled={actionLoading}
+              className="flex-1 bg-emerald-600 hover:bg-emerald-700"
+              isLoading={actionLoading}
+            >
+              Verify & Credit
+            </Button>
           </div>
         </div>
-      )}
+      </Modal>
 
       {/* Reject Modal */}
-      {showRejectModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-xl max-w-md w-full p-6">
-            <h2 className="text-xl font-bold text-gray-900 mb-4">Reject Request</h2>
-            <textarea
-              value={rejectionReason}
-              onChange={(e) => setRejectionReason(e.target.value)}
-              placeholder="Enter rejection reason (required)"
-              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-transparent mb-4"
-              rows={4}
-              required
-            />
-            <div className="flex gap-3">
-              <button
-                onClick={() => setShowRejectModal(false)}
-                className="flex-1 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleReject}
-                disabled={actionLoading || !rejectionReason.trim()}
-                className="flex-1 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50"
-              >
-                {actionLoading ? 'Processing...' : 'Reject Request'}
-              </button>
-            </div>
+      <Modal
+        isOpen={showRejectModal}
+        onClose={() => setShowRejectModal(false)}
+        title="Reject Request"
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-muted-foreground">
+            Please provide a reason for rejecting this request. The user will be notified.
+          </p>
+          <textarea
+            value={rejectionReason}
+            onChange={(e) => setRejectionReason(e.target.value)}
+            placeholder="Enter rejection reason (required)"
+            className="w-full px-4 py-3 bg-secondary/30 border border-white/10 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-transparent text-foreground placeholder:text-muted-foreground"
+            rows={4}
+            required
+          />
+          <div className="flex gap-3">
+            <Button
+              variant="outline"
+              onClick={() => setShowRejectModal(false)}
+              className="flex-1"
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={handleReject}
+              disabled={actionLoading || !rejectionReason.trim()}
+              className="flex-1"
+              isLoading={actionLoading}
+            >
+              Reject Request
+            </Button>
           </div>
         </div>
-      )}
+      </Modal>
+
+      {/* Withdrawal Modal */}
+      <Modal
+        isOpen={showWithdrawalModal && !!selectedWithdrawal}
+        onClose={() => setShowWithdrawalModal(false)}
+        title={`Withdrawal Request - ${selectedWithdrawal?.user.firstName} ${selectedWithdrawal?.user.lastName}`}
+      >
+        {selectedWithdrawal && (
+          <div className="space-y-6 max-h-[70vh] overflow-y-auto pr-2">
+            {/* User Info */}
+            <div className="bg-secondary/30 p-4 rounded-lg space-y-2">
+              <h3 className="text-sm font-semibold text-foreground mb-3">User Information</h3>
+              <div className="grid grid-cols-2 gap-3 text-sm">
+                <div>
+                  <span className="text-muted-foreground">Name:</span>
+                  <span className="ml-2 text-foreground">{selectedWithdrawal.user.firstName} {selectedWithdrawal.user.lastName}</span>
+                </div>
+                <div>
+                  <span className="text-muted-foreground">Email:</span>
+                  <span className="ml-2 text-foreground">{selectedWithdrawal.user.email}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Withdrawal Details */}
+            <div className="space-y-3">
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Amount (USDT):</span>
+                <span className="font-semibold text-emerald-500">{selectedWithdrawal.amount}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Method:</span>
+                <span className="text-foreground">{selectedWithdrawal.method}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Date:</span>
+                <span className="text-foreground">{new Date(selectedWithdrawal.createdAt).toLocaleString()}</span>
+              </div>
+            </div>
+
+            {/* Bank Details */}
+            {selectedWithdrawal.bankDetails && (
+              <div className="bg-secondary/30 p-4 rounded-lg space-y-2">
+                <h3 className="text-sm font-semibold text-foreground mb-3">Bank Details</h3>
+                <div className="space-y-2 text-sm">
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Account Name:</span>
+                    <span className="text-foreground">{selectedWithdrawal.bankDetails.accountName}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Bank Name:</span>
+                    <span className="text-foreground">{selectedWithdrawal.bankDetails.bankName}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Account Number:</span>
+                    <span className="text-foreground font-mono">{selectedWithdrawal.bankDetails.accountNumber}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">IFSC Code:</span>
+                    <span className="text-foreground font-mono">{selectedWithdrawal.bankDetails.ifscCode}</span>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* User Notes */}
+            {selectedWithdrawal.userNotes && (
+              <div>
+                <h3 className="text-sm font-semibold text-foreground mb-2">User Notes</h3>
+                <p className="text-sm bg-secondary/30 p-3 rounded-lg text-muted-foreground">{selectedWithdrawal.userNotes}</p>
+              </div>
+            )}
+
+            {/* Process Form */}
+            <div className="space-y-4 pt-4 border-t border-white/10">
+              <div>
+                <label className="block text-sm font-medium text-foreground mb-2">Transaction Reference (UTR)</label>
+                <input
+                  type="text"
+                  value={transactionRef}
+                  onChange={(e) => setTransactionRef(e.target.value)}
+                  placeholder="UTR123456789012"
+                  className="w-full px-3 py-2 bg-secondary/30 border border-white/10 rounded-lg focus:ring-2 focus:ring-primary/50 focus:outline-none"
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-foreground mb-2">Admin Notes</label>
+                <textarea
+                  value={withdrawalAdminNotes}
+                  onChange={(e) => setWithdrawalAdminNotes(e.target.value)}
+                  placeholder="Payment sent via NEFT..."
+                  rows={3}
+                  className="w-full px-3 py-2 bg-secondary/30 border border-white/10 rounded-lg focus:ring-2 focus:ring-primary/50 focus:outline-none"
+                />
+              </div>
+            </div>
+
+            {/* Actions */}
+            <div className="flex gap-3">
+              <Button
+                variant="outline"
+                onClick={() => setShowWithdrawalModal(false)}
+                className="flex-1"
+              >
+                Cancel
+              </Button>
+              <Button
+                variant="destructive"
+                onClick={handleRejectWithdrawal}
+                disabled={actionLoading}
+                className="flex-1"
+              >
+                Reject
+              </Button>
+              <Button
+                variant="primary"
+                onClick={handleProcessWithdrawal}
+                disabled={actionLoading || !transactionRef.trim()}
+                className="flex-1"
+                isLoading={actionLoading}
+              >
+                Process & Pay
+              </Button>
+            </div>
+          </div>
+        )}
+      </Modal>
+
 
       {/* Error Toast */}
       {error && (
-        <div className="fixed bottom-4 right-4 bg-red-600 text-white px-6 py-3 rounded-lg shadow-lg flex items-center gap-3 z-50">
+        <div className="fixed bottom-4 right-4 bg-destructive text-destructive-foreground px-6 py-3 rounded-lg shadow-lg flex items-center gap-3 z-50 animate-in slide-in-from-bottom-5">
           <XCircle className="w-5 h-5" />
           <span>{error}</span>
-          <button onClick={() => setError('')} className="ml-2">
+          <button onClick={() => setError('')} className="ml-2 hover:opacity-80">
             <X className="w-4 h-4" />
           </button>
         </div>

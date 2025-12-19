@@ -61,7 +61,7 @@ export default function Logo({ size = 'md', subtitle, className = '' }: LogoProp
   return (
     <div className={`text-center ${className}`}>
       <div className="flex items-center justify-center mb-2">
-        <span className={`${config.text} font-bold text-gray-900`}>AuramX</span>
+        <span className={`${config.text} font-bold text-white`}>AuramX</span>
         <div ref={animationContainer} className={config.container} />
       </div>
       {subtitle && (
