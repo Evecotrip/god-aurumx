@@ -158,6 +158,212 @@ export interface ReviewKYCPayload {
   documentIssues?: DocumentIssue[];
 }
 
+// User Management Types
+export interface UserWallet {
+  totalBalance: string;
+  availableBalance: string;
+  lockedBalance: string;
+  investedAmount: string;
+  totalEarnings: string;
+}
+
+export interface ReferredByUser {
+  id: string;
+  firstName: string;
+  lastName: string;
+  email: string;
+  referralCode: string;
+}
+
+export interface User {
+  id: string;
+  uniqueCode: string;
+  email: string;
+  phone: string;
+  firstName: string;
+  lastName: string;
+  dateOfBirth: string | null;
+  kycStatus: string;
+  kycVerifiedAt: string | null;
+  role: string;
+  status: string;
+  referralCode: string;
+  referredById: string | null;
+  hierarchyLevel: number;
+  emailVerified: boolean;
+  phoneVerified: boolean;
+  lastLoginAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+  referredBy: ReferredByUser | null;
+  wallet: UserWallet;
+}
+
+export interface UserFilters {
+  page?: number;
+  limit?: number;
+  status?: string;
+  search?: string;
+}
+
+export interface TransactionByType {
+  type: string;
+  count: number;
+  totalAmount: string;
+}
+
+export interface TransactionByStatus {
+  status: string;
+  count: number;
+}
+
+export interface RecentTransaction {
+  id: string;
+  type: string;
+  amount: string;
+  status: string;
+  createdAt: string;
+  description: string;
+}
+
+export interface TransactionStats {
+  total: number;
+  byType: TransactionByType[];
+  byStatus: TransactionByStatus[];
+  recent: RecentTransaction[];
+}
+
+export interface RecentBalanceLog {
+  id: string;
+  operation: string;
+  amount: string;
+  previousBalance: string;
+  newBalance: string;
+  description: string;
+  createdAt: string;
+}
+
+export interface BalanceLogStats {
+  total: number;
+  recent: RecentBalanceLog[];
+}
+
+export interface InvestmentByProfile {
+  profile: string;
+  count: number;
+  totalAmount: string;
+}
+
+export interface RecentInvestment {
+  id: string;
+  referenceId: string;
+  profile: string;
+  amount: string;
+  status: string;
+  createdAt: string;
+  maturityDate: string;
+}
+
+export interface InvestmentStats {
+  total: number;
+  active: number;
+  matured: number;
+  totalInvested: string;
+  byProfile: InvestmentByProfile[];
+  recent: RecentInvestment[];
+}
+
+export interface CommissionByType {
+  type: string;
+  count: number;
+  totalAmount: string;
+}
+
+export interface RecentCommission {
+  id: string;
+  type: string;
+  amount: string;
+  status: string;
+  createdAt: string;
+  description: string;
+}
+
+export interface CommissionStats {
+  total: number;
+  totalEarned: string;
+  byType: CommissionByType[];
+  recent: RecentCommission[];
+}
+
+export interface HierarchyStats {
+  directReferrals: number;
+  totalDownline: number;
+  maxDepth: number;
+}
+
+export interface RecentWithdrawalRequest {
+  id: string;
+  amount: string;
+  status: string;
+  method: string;
+  createdAt: string;
+}
+
+export interface WithdrawalStats {
+  total: number;
+  totalAmount: string;
+  pending: number;
+  completed: number;
+  recent: RecentWithdrawalRequest[];
+}
+
+export interface RecentAddMoneyRequest {
+  id: string;
+  amount: string;
+  bonusAmount: string;
+  totalAmount: string;
+  status: string;
+  method: string;
+  createdAt: string;
+}
+
+export interface AddMoneyRequestStats {
+  total: number;
+  totalAmount: string;
+  pending: number;
+  completed: number;
+  recent: RecentAddMoneyRequest[];
+}
+
+export interface UserStatsWallet extends UserWallet {
+  id: string;
+  lockedProfitBalance: string;
+  totalCommissions: string;
+  totalReturns: string;
+  totalBonus: string;
+  totalInvested: string;
+  totalWithdrawn: string;
+  totalTransferred: string;
+  totalBorrowed: string;
+  totalLent: string;
+  lastWithdrawalAt: string | null;
+  withdrawalUnlockedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface UserStatsData {
+  user: User;
+  wallet: UserStatsWallet;
+  transactions: TransactionStats;
+  balanceLogs: BalanceLogStats;
+  investments: InvestmentStats;
+  commissions: CommissionStats;
+  hierarchy: HierarchyStats;
+  withdrawals: WithdrawalStats;
+  addMoneyRequests: AddMoneyRequestStats;
+}
+
 // ============================================
 // HELPER FUNCTIONS
 // ============================================
@@ -493,6 +699,91 @@ export async function reviewKYC(
     return {
       success: false,
       message: "Network error while reviewing KYC",
+    };
+  }
+}
+
+// ============================================
+// USER MANAGEMENT API
+// ============================================
+
+/**
+ * Get all users with optional filters
+ * @param token - Authentication token
+ * @param filters - Optional filters (page, limit, status, search)
+ * @returns Promise with paginated users
+ */
+export async function getAllUsers(
+  token: string,
+  filters?: UserFilters
+): Promise<ApiResponse<User[]> & { pagination?: any }> {
+  try {
+    const queryParams = new URLSearchParams();
+    
+    if (filters?.page) queryParams.append('page', filters.page.toString());
+    if (filters?.limit) queryParams.append('limit', filters.limit.toString());
+    if (filters?.status) queryParams.append('status', filters.status);
+    if (filters?.search) queryParams.append('search', filters.search);
+
+    const queryString = queryParams.toString();
+    const url = `${BASE_URL}/api/v1/god-admin/users${queryString ? `?${queryString}` : ''}`;
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: getAuthHeaders(token),
+    });
+
+    if (!response.ok) {
+      const errorData = await safeJsonParse<any>(response);
+      return {
+        success: false,
+        message: errorData.message || "Failed to fetch users",
+      };
+    }
+
+    return await safeJsonParse(response);
+  } catch (error) {
+    console.error("Error fetching users:", error);
+    return {
+      success: false,
+      message: "Network error while fetching users",
+    };
+  }
+}
+
+/**
+ * Get user statistics by user ID
+ * @param token - Authentication token
+ * @param userId - User ID
+ * @returns Promise with detailed user statistics
+ */
+export async function getUserStats(
+  token: string,
+  userId: string
+): Promise<ApiResponse<UserStatsData>> {
+  try {
+    const response = await fetch(
+      `${BASE_URL}/api/v1/god-admin/users/${userId}/stats`,
+      {
+        method: "GET",
+        headers: getAuthHeaders(token),
+      }
+    );
+
+    if (!response.ok) {
+      const errorData = await safeJsonParse<any>(response);
+      return {
+        success: false,
+        message: errorData.message || "Failed to fetch user stats",
+      };
+    }
+
+    return await safeJsonParse(response);
+  } catch (error) {
+    console.error("Error fetching user stats:", error);
+    return {
+      success: false,
+      message: "Network error while fetching user stats",
     };
   }
 }
