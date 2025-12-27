@@ -364,6 +364,19 @@ export interface UserStatsData {
   addMoneyRequests: AddMoneyRequestStats;
 }
 
+// Daily Profit Range Types
+export interface ProfileRateRange {
+  minRate: string;
+  maxRate: string;
+}
+
+export interface DailyProfitRangeData {
+  bronze: ProfileRateRange;
+  silver: ProfileRateRange;
+  gold: ProfileRateRange;
+  diamond: ProfileRateRange;
+}
+
 // ============================================
 // HELPER FUNCTIONS
 // ============================================
@@ -784,6 +797,45 @@ export async function getUserStats(
     return {
       success: false,
       message: "Network error while fetching user stats",
+    };
+  }
+}
+
+// ============================================
+// DAILY PROFIT RANGE API
+// ============================================
+
+/**
+ * Get today's daily profit rate ranges for all investment profiles
+ * @param token - Authentication token
+ * @returns Promise with rate ranges for bronze, silver, gold, and diamond profiles
+ */
+export async function getDailyProfitRange(
+  token: string
+): Promise<ApiResponse<DailyProfitRangeData>> {
+  try {
+    const response = await fetch(
+      `${BASE_URL}/api/v1/admin/daily-rates/today/range`,
+      {
+        method: "GET",
+        headers: getAuthHeaders(token),
+      }
+    );
+
+    if (!response.ok) {
+      const errorData = await safeJsonParse<any>(response);
+      return {
+        success: false,
+        message: errorData.message || "Failed to fetch daily profit range",
+      };
+    }
+
+    return await safeJsonParse(response);
+  } catch (error) {
+    console.error("Error fetching daily profit range:", error);
+    return {
+      success: false,
+      message: "Network error while fetching daily profit range",
     };
   }
 }

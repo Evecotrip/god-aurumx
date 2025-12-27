@@ -37,6 +37,10 @@ import {
   type DailyRateStatus,
   type SetDailyRatePayload
 } from '@/api/currency-bank-api';
+import {
+  getDailyProfitRange,
+  type DailyProfitRangeData
+} from '@/api/god-admin-api';
 
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -64,6 +68,7 @@ export default function SettingsPage() {
   // Daily Rate States
   const [rateStatus, setRateStatus] = useState<DailyRateStatus | null>(null);
   const [showRateModal, setShowRateModal] = useState(false);
+  const [profitRange, setProfitRange] = useState<DailyProfitRangeData | null>(null);
 
   // Bank Account Form
   const [bankFormData, setBankFormData] = useState<CreateBankAccountPayload>({
@@ -142,6 +147,19 @@ export default function SettingsPage() {
     }
   };
 
+  const fetchProfitRange = async () => {
+    if (!token) return;
+    const response = await getDailyProfitRange(token);
+    if (response.success && response.data) {
+      setProfitRange(response.data);
+    }
+  };
+
+  const openRateModal = () => {
+    fetchProfitRange();
+    setShowRateModal(true);
+  };
+
   const handleCreateBankAccount = async () => {
     if (!token) return;
     setLoading(true);
@@ -205,6 +223,64 @@ export default function SettingsPage() {
       setError(response.message || 'Failed to deactivate bank account');
     }
     setLoading(false);
+  };
+
+  const handleToggleActive = async (account: BankAccount) => {
+    if (!token) return;
+    const updatePayload: UpdateBankAccountPayload = {
+      accountName: account.accountName,
+      accountHolder: account.accountHolder,
+      bankName: account.bankName,
+      accountNumber: account.accountNumber,
+      ifscCode: account.ifscCode,
+      branch: account.branch,
+      upiId: account.upiId || '',
+      qrCodeProvider: account.qrCodeProvider || '',
+      instructions: account.instructions,
+      accountType: account.accountType,
+      minAmount: parseInt(account.minAmount),
+      maxAmount: parseInt(account.maxAmount),
+      processingTime: account.processingTime,
+      isActive: !account.isActive,
+      isPrimary: account.isPrimary,
+      displayOrder: account.displayOrder
+    };
+    const response = await updateBankAccount(token, account.id, updatePayload);
+    if (response.success) {
+      setSuccess(`Bank account ${!account.isActive ? 'activated' : 'deactivated'} successfully`);
+      fetchBankAccounts();
+    } else {
+      setError(response.message || 'Failed to update bank account');
+    }
+  };
+
+  const handleTogglePrimary = async (account: BankAccount) => {
+    if (!token) return;
+    const updatePayload: UpdateBankAccountPayload = {
+      accountName: account.accountName,
+      accountHolder: account.accountHolder,
+      bankName: account.bankName,
+      accountNumber: account.accountNumber,
+      ifscCode: account.ifscCode,
+      branch: account.branch,
+      upiId: account.upiId || '',
+      qrCodeProvider: account.qrCodeProvider || '',
+      instructions: account.instructions,
+      accountType: account.accountType,
+      minAmount: parseInt(account.minAmount),
+      maxAmount: parseInt(account.maxAmount),
+      processingTime: account.processingTime,
+      isActive: account.isActive,
+      isPrimary: !account.isPrimary,
+      displayOrder: account.displayOrder
+    };
+    const response = await updateBankAccount(token, account.id, updatePayload);
+    if (response.success) {
+      setSuccess(`Primary status ${!account.isPrimary ? 'enabled' : 'disabled'} successfully`);
+      fetchBankAccounts();
+    } else {
+      setError(response.message || 'Failed to update bank account');
+    }
   };
 
   const handleSetDailyRate = async () => {
@@ -361,7 +437,29 @@ export default function SettingsPage() {
                         </div>
                       )}
                       <div className="text-sm text-muted-foreground">₹{account.minAmount} - ₹{account.maxAmount}</div>
-                      <div className="flex gap-2 pt-3">
+                      
+                      <div className="flex items-center gap-4 pt-2 pb-2 border-t border-white/5">
+                        <label className="flex items-center gap-2 cursor-pointer">
+                          <input 
+                            type="checkbox" 
+                            checked={account.isActive} 
+                            onChange={() => handleToggleActive(account)} 
+                            className="w-4 h-4 text-primary rounded border-white/20 bg-secondary/50 focus:ring-2 focus:ring-primary focus:ring-offset-0" 
+                          />
+                          <span className="text-sm font-medium text-foreground">Active</span>
+                        </label>
+                        <label className="flex items-center gap-2 cursor-pointer">
+                          <input 
+                            type="checkbox" 
+                            checked={account.isPrimary} 
+                            onChange={() => handleTogglePrimary(account)} 
+                            className="w-4 h-4 text-primary rounded border-white/20 bg-secondary/50 focus:ring-2 focus:ring-primary focus:ring-offset-0" 
+                          />
+                          <span className="text-sm font-medium text-foreground">Primary</span>
+                        </label>
+                      </div>
+
+                      <div className="flex gap-2 pt-1">
                         <Button variant="outline" size="sm" onClick={() => openEditModal(account)} leftIcon={<Edit className="w-4 h-4" />} className="flex-1">Edit</Button>
                         <Button variant="destructive" size="sm" onClick={() => { setSelectedAccount(account); setShowDeleteConfirm(true); }} leftIcon={<Trash2 className="w-4 h-4" />} className="flex-1">Delete</Button>
                       </div>
@@ -386,7 +484,7 @@ export default function SettingsPage() {
           <>
             <div className="flex items-center justify-between mb-6">
               <h2 className="text-lg font-semibold">Daily Profit Rates</h2>
-              <Button onClick={() => setShowRateModal(true)} leftIcon={<Plus className="w-4 h-4" />}>Set Today&apos;s Rate</Button>
+              <Button onClick={openRateModal} leftIcon={<Plus className="w-4 h-4" />}>Set Today&apos;s Rate</Button>
             </div>
 
             <Card className="mb-6">
@@ -547,22 +645,75 @@ export default function SettingsPage() {
       <Modal isOpen={showRateModal} onClose={() => setShowRateModal(false)} title="Set Daily Profit Rate" maxWidth="lg">
         <div className="space-y-4">
           <Input label="Date" type="date" value={rateFormData.date} onChange={(e) => setRateFormData({ ...rateFormData, date: e.target.value })} />
+          
+          {profitRange && (
+            <div className="bg-blue-500/10 border border-blue-500/20 rounded-lg p-3 mb-2">
+              <p className="text-sm text-blue-400 font-medium mb-1">Rate Ranges:</p>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs text-muted-foreground">
+                <div><span className="text-amber-500">Bronze:</span> {profitRange.bronze.minRate}% - {profitRange.bronze.maxRate}%</div>
+                <div><span className="text-slate-300">Silver:</span> {profitRange.silver.minRate}% - {profitRange.silver.maxRate}%</div>
+                <div><span className="text-yellow-500">Gold:</span> {profitRange.gold.minRate}% - {profitRange.gold.maxRate}%</div>
+                <div><span className="text-cyan-400">Diamond:</span> {profitRange.diamond.minRate}% - {profitRange.diamond.maxRate}%</div>
+              </div>
+            </div>
+          )}
+
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             <div>
-              <label className="block text-sm font-medium text-amber-500 mb-2">Bronze (%)</label>
-              <Input type="number" value={rateFormData.bronzeRate} onChange={(e) => setRateFormData({ ...rateFormData, bronzeRate: parseFloat(e.target.value) || 0 })} />
+              <label className="block text-sm font-medium text-amber-500 mb-2">
+                Bronze (%)
+                {profitRange && <span className="text-xs text-muted-foreground ml-1">({profitRange.bronze.minRate}-{profitRange.bronze.maxRate})</span>}
+              </label>
+              <Input 
+                type="number" 
+                step="0.01"
+                min={profitRange ? parseFloat(profitRange.bronze.minRate) : undefined}
+                max={profitRange ? parseFloat(profitRange.bronze.maxRate) : undefined}
+                value={rateFormData.bronzeRate} 
+                onChange={(e) => setRateFormData({ ...rateFormData, bronzeRate: parseFloat(e.target.value) || 0 })} 
+              />
             </div>
             <div>
-              <label className="block text-sm font-medium text-slate-300 mb-2">Silver (%)</label>
-              <Input type="number" value={rateFormData.silverRate} onChange={(e) => setRateFormData({ ...rateFormData, silverRate: parseFloat(e.target.value) || 0 })} />
+              <label className="block text-sm font-medium text-slate-300 mb-2">
+                Silver (%)
+                {profitRange && <span className="text-xs text-muted-foreground ml-1">({profitRange.silver.minRate}-{profitRange.silver.maxRate})</span>}
+              </label>
+              <Input 
+                type="number" 
+                step="0.01"
+                min={profitRange ? parseFloat(profitRange.silver.minRate) : undefined}
+                max={profitRange ? parseFloat(profitRange.silver.maxRate) : undefined}
+                value={rateFormData.silverRate} 
+                onChange={(e) => setRateFormData({ ...rateFormData, silverRate: parseFloat(e.target.value) || 0 })} 
+              />
             </div>
             <div>
-              <label className="block text-sm font-medium text-yellow-500 mb-2">Gold (%)</label>
-              <Input type="number" value={rateFormData.goldRate} onChange={(e) => setRateFormData({ ...rateFormData, goldRate: parseFloat(e.target.value) || 0 })} />
+              <label className="block text-sm font-medium text-yellow-500 mb-2">
+                Gold (%)
+                {profitRange && <span className="text-xs text-muted-foreground ml-1">({profitRange.gold.minRate}-{profitRange.gold.maxRate})</span>}
+              </label>
+              <Input 
+                type="number" 
+                step="0.01"
+                min={profitRange ? parseFloat(profitRange.gold.minRate) : undefined}
+                max={profitRange ? parseFloat(profitRange.gold.maxRate) : undefined}
+                value={rateFormData.goldRate} 
+                onChange={(e) => setRateFormData({ ...rateFormData, goldRate: parseFloat(e.target.value) || 0 })} 
+              />
             </div>
             <div>
-              <label className="block text-sm font-medium text-cyan-400 mb-2">Diamond (%)</label>
-              <Input type="number" value={rateFormData.diamondRate} onChange={(e) => setRateFormData({ ...rateFormData, diamondRate: parseFloat(e.target.value) || 0 })} />
+              <label className="block text-sm font-medium text-cyan-400 mb-2">
+                Diamond (%)
+                {profitRange && <span className="text-xs text-muted-foreground ml-1">({profitRange.diamond.minRate}-{profitRange.diamond.maxRate})</span>}
+              </label>
+              <Input 
+                type="number" 
+                step="0.01"
+                min={profitRange ? parseFloat(profitRange.diamond.minRate) : undefined}
+                max={profitRange ? parseFloat(profitRange.diamond.maxRate) : undefined}
+                value={rateFormData.diamondRate} 
+                onChange={(e) => setRateFormData({ ...rateFormData, diamondRate: parseFloat(e.target.value) || 0 })} 
+              />
             </div>
           </div>
           <div>
